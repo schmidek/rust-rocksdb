@@ -257,7 +257,7 @@ impl<T: ThreadMode> DBWithThreadMode<T> {
 
     /// Opens the database with a Time to Live compaction filter and column family names.
     ///
-    /// Column families opened using this function will be created with default `Options`.    
+    /// Column families opened using this function will be created with default `Options`.
     pub fn open_cf_with_ttl<P, I, N>(
         opts: &Options,
         path: P,
@@ -981,6 +981,36 @@ impl<T: ThreadMode> DBWithThreadMode<T> {
                 opts.inner,
                 cf_name.as_ptr(),
             ))
+        })
+    }
+
+    fn create_inner_cf_handles<N: AsRef<str>>(
+        &self,
+        names: &Vec<N>,
+        opts: &Options,
+    ) -> Result<Vec<*mut ffi::rocksdb_column_family_handle_t>, Error> {
+        let cf_names: Vec<_> = names.iter().map(|name| CString::new(name.as_ref().to_string().as_bytes()).unwrap()).collect();
+        let cf_names_ptr: Vec<_> = cf_names.iter().map(|name| name.as_ptr()).collect();
+        /*let cf_name = if let Ok(c) = CString::new(name.as_bytes()) {
+            c
+        } else {
+            return Err(Error::new(
+                "Failed to convert path to CString when creating cf".to_owned(),
+            ));
+        };*/
+        Ok(unsafe {
+            let c_handles = ffi_try!(ffi::rocksdb_create_column_families(
+                self.inner,
+                opts.inner,
+                names.len() as i32,
+                cf_names_ptr.as_ptr(),
+            ));
+            let mut handles = Vec::new();
+            for i in 0..names.len() {
+                handles.push(*c_handles.add(i));
+            }
+            ffi::rocksdb_create_column_families_destroy(c_handles);
+            handles
         })
     }
 
@@ -1801,6 +1831,16 @@ impl DBWithThreadMode<SingleThreaded> {
         self.cfs
             .cfs
             .insert(name.as_ref().to_string(), ColumnFamily { inner });
+        Ok(())
+    }
+
+    pub fn create_cfs<N: AsRef<str>>(&mut self, names: Vec<N>, opts: &Options) -> Result<(), Error> {
+        let inners = self.create_inner_cf_handles(&names, opts)?;
+        for (name, inner) in names.into_iter().zip(inners.into_iter()) {
+            self.cfs
+                .cfs
+                .insert(name.as_ref().to_string(), ColumnFamily { inner });
+        }
         Ok(())
     }
 
