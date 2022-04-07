@@ -145,6 +145,38 @@ pub trait DBAccess {
         key: K,
         readopts: &ReadOptions,
     ) -> Result<Option<Vec<u8>>, Error>;
+
+    fn get_pinned_opt<K: AsRef<[u8]>>(
+        &self,
+        key: K,
+        readopts: &ReadOptions,
+    ) -> Result<Option<DBPinnableSlice>, Error>;
+
+    fn get_pinned_cf_opt<K: AsRef<[u8]>>(
+        &self,
+        cf: &impl AsColumnFamilyRef,
+        key: K,
+        readopts: &ReadOptions,
+    ) -> Result<Option<DBPinnableSlice>, Error>;
+
+    fn multi_get_opt<K, I>(
+        &self,
+        keys: I,
+        readopts: &ReadOptions,
+    ) -> Vec<Result<Option<Vec<u8>>, Error>>
+    where
+        K: AsRef<[u8]>,
+        I: IntoIterator<Item = K>;
+
+    fn multi_get_cf_opt<'b, K, I, W>(
+        &self,
+        keys_cf: I,
+        readopts: &ReadOptions,
+    ) -> Vec<Result<Option<Vec<u8>>, Error>>
+    where
+        K: AsRef<[u8]>,
+        I: IntoIterator<Item = (&'b W, K)>,
+        W: AsColumnFamilyRef + 'b;
 }
 
 impl<T: ThreadMode> DBAccess for DBWithThreadMode<T> {
@@ -167,6 +199,48 @@ impl<T: ThreadMode> DBAccess for DBWithThreadMode<T> {
         readopts: &ReadOptions,
     ) -> Result<Option<Vec<u8>>, Error> {
         self.get_cf_opt(cf, key, readopts)
+    }
+
+    fn get_pinned_opt<K: AsRef<[u8]>>(
+        &self,
+        key: K,
+        readopts: &ReadOptions,
+    ) -> Result<Option<DBPinnableSlice>, Error> {
+        self.get_pinned_opt(key, readopts)
+    }
+
+    fn get_pinned_cf_opt<K: AsRef<[u8]>>(
+        &self,
+        cf: &impl AsColumnFamilyRef,
+        key: K,
+        readopts: &ReadOptions,
+    ) -> Result<Option<DBPinnableSlice>, Error> {
+        self.get_pinned_cf_opt(cf, key, readopts)
+    }
+
+    fn multi_get_opt<K, I>(
+        &self,
+        keys: I,
+        readopts: &ReadOptions,
+    ) -> Vec<Result<Option<Vec<u8>>, Error>>
+    where
+        K: AsRef<[u8]>,
+        I: IntoIterator<Item = K>,
+    {
+        self.multi_get_opt(keys, readopts)
+    }
+
+    fn multi_get_cf_opt<'b, K, I, W>(
+        &self,
+        keys_cf: I,
+        readopts: &ReadOptions,
+    ) -> Vec<Result<Option<Vec<u8>>, Error>>
+    where
+        K: AsRef<[u8]>,
+        I: IntoIterator<Item = (&'b W, K)>,
+        W: AsColumnFamilyRef + 'b,
+    {
+        self.multi_get_cf_opt(keys_cf, readopts)
     }
 }
 
