@@ -1335,6 +1335,39 @@ impl<T: ThreadMode, D: DBInner> DBCommon<T, D> {
         })
     }
 
+    fn create_inner_cf_handles(
+        &self,
+        names: Vec<impl CStrLike>,
+        opts: &Options,
+    ) -> Result<Vec<*mut ffi::rocksdb_column_family_handle_t>, Error> {
+        let names_len = names.len();
+        let cf_names = names
+            .into_iter()
+            .map(|name| {
+                name.bake().map_err(|err| {
+                    Error::new(format!(
+                        "Failed to convert path to CString when creating cf: {err}"
+                    ))
+                })
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
+        let cf_name_ptrs: Vec<_> = cf_names.iter().map(|name| name.as_ptr()).collect();
+        Ok(unsafe {
+            let c_handles = ffi_try!(ffi::rocksdb_create_column_families(
+                self.inner.inner(),
+                opts.inner,
+                names_len as i32,
+                cf_name_ptrs.as_ptr(),
+            ));
+            let mut handles = Vec::new();
+            for i in 0..names_len {
+                handles.push(*c_handles.add(i));
+            }
+            ffi::rocksdb_create_column_families_destroy(c_handles);
+            handles
+        })
+    }
+
     pub fn iterator<'a: 'b, 'b>(
         &'a self,
         mode: IteratorMode,
@@ -2113,6 +2146,21 @@ impl<I: DBInner> DBCommon<SingleThreaded, I> {
         Ok(())
     }
 
+    pub fn create_cfs<N: AsRef<str>>(
+        &mut self,
+        names: Vec<N>,
+        opts: &Options,
+    ) -> Result<(), Error> {
+        let name_refs: Vec<_> = names.iter().map(AsRef::as_ref).collect();
+        let inners = self.create_inner_cf_handles(name_refs, opts)?;
+        for (name, inner) in names.into_iter().zip(inners.into_iter()) {
+            self.cfs
+                .cfs
+                .insert(name.as_ref().to_string(), ColumnFamily { inner });
+        }
+        Ok(())
+    }
+
     /// Drops the column family with the given name
     pub fn drop_cf(&mut self, name: &str) -> Result<(), Error> {
         if let Some(cf) = self.cfs.cfs.remove(name) {
@@ -2136,6 +2184,18 @@ impl<I: DBInner> DBCommon<MultiThreaded, I> {
             name.as_ref().to_string(),
             Arc::new(UnboundColumnFamily { inner }),
         );
+        Ok(())
+    }
+
+    pub fn create_cfs<N: AsRef<str>>(&self, names: Vec<N>, opts: &Options) -> Result<(), Error> {
+        let name_refs: Vec<_> = names.iter().map(AsRef::as_ref).collect();
+        let inners = self.create_inner_cf_handles(name_refs, opts)?;
+        for (name, inner) in names.into_iter().zip(inners.into_iter()) {
+            self.cfs.cfs.write().unwrap().insert(
+                name.as_ref().to_string(),
+                Arc::new(UnboundColumnFamily { inner }),
+            );
+        }
         Ok(())
     }
 
