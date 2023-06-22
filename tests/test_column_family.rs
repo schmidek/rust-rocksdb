@@ -241,6 +241,85 @@ fn test_column_family_with_transactiondb() {
 }
 
 #[test]
+fn test_column_families() {
+    let n = DBPath::new("_rust_rocksdb_cfstest");
+
+    // should be able to create column families
+    {
+        let mut opts = Options::default();
+        opts.create_if_missing(true);
+        opts.set_merge_operator_associative("test operator", test_provided_merge);
+        #[cfg(feature = "multi-threaded-cf")]
+        let db = DB::open(&opts, &n).unwrap();
+        #[cfg(not(feature = "multi-threaded-cf"))]
+        let mut db = DB::open(&opts, &n).unwrap();
+        let opts = Options::default();
+        match db.create_cfs(vec!["cf1", "cf2"], &opts) {
+            Ok(()) => println!("cf1 and cr2 created successfully"),
+            Err(e) => {
+                panic!("could not create column family: {}", e);
+            }
+        }
+    }
+
+    // should be able to list cfs
+    {
+        let opts = Options::default();
+        let vec = DB::list_cf(&opts, &n);
+        match vec {
+            Ok(vec) => assert_eq!(vec, vec![DEFAULT_COLUMN_FAMILY_NAME, "cf1", "cf2"]),
+            Err(e) => panic!("failed to drop column family: {}", e),
+        }
+    }
+
+    // should fail to open db without specifying same column families
+    {
+        let mut opts = Options::default();
+        opts.set_merge_operator_associative("test operator", test_provided_merge);
+        match DB::open(&opts, &n) {
+            Ok(_db) => panic!(
+                "should not have opened DB successfully without \
+                        specifying column
+            families"
+            ),
+            Err(e) => assert!(e.to_string().starts_with("Invalid argument")),
+        }
+    }
+
+    // should properly open db when specifying all column families
+    {
+        let mut opts = Options::default();
+        opts.set_merge_operator_associative("test operator", test_provided_merge);
+        match DB::open_cf(&opts, &n, &["cf1", "cf2"]) {
+            Ok(_db) => println!("successfully opened db with column family"),
+            Err(e) => panic!("failed to open db with column family: {}", e),
+        }
+    }
+
+    // TODO should be able to use writebatch ops with a cf
+    {}
+    // TODO should be able to iterate over a cf
+    {}
+    // should b able to drop a cf
+    {
+        #[cfg(feature = "multi-threaded-cf")]
+        let db = DB::open_cf(&Options::default(), &n, &["cf1", "cf2"]).unwrap();
+        #[cfg(not(feature = "multi-threaded-cf"))]
+        let mut db = DB::open_cf(&Options::default(), &n, &["cf1", "cf2"]).unwrap();
+
+        match db.drop_cf("cf1") {
+            Ok(_) => println!("cf1 successfully dropped."),
+            Err(e) => panic!("failed to drop column family: {}", e),
+        }
+
+        match db.drop_cf("cf2") {
+            Ok(_) => println!("cf2 successfully dropped."),
+            Err(e) => panic!("failed to drop column family: {}", e),
+        }
+    }
+}
+
+#[test]
 fn test_can_open_db_with_results_of_list_cf() {
     // Test scenario derived from GitHub issue #175 and 177
 
