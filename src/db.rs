@@ -2595,6 +2595,27 @@ impl<T: ThreadMode, D: DBInner> DBCommon<T, D> {
         Ok(())
     }
 
+    fn drop_column_families<C>(
+        &self,
+        cf_inners: &mut [*mut ffi::rocksdb_column_family_handle_t],
+        cfs: Vec<C>,
+    ) -> Result<(), Error> {
+        unsafe {
+            // first mark the column family as dropped
+            ffi_try!(ffi::rocksdb_drop_column_families(
+                self.inner.inner(),
+                cf_inners.len() as i32,
+                cf_inners.as_mut_ptr()
+            ));
+        }
+        // then finally reclaim any resources (mem, files) by destroying the column
+        // families handle by drop()-ing them
+        for cf in cfs {
+            drop(cf);
+        }
+        Ok(())
+    }
+
     /// Increase the full_history_ts of column family. The new ts_low value should
     /// be newer than current full_history_ts value.
     /// If another thread updates full_history_ts_low concurrently to a higher
@@ -2685,6 +2706,20 @@ impl<I: DBInner> DBCommon<SingleThreaded, I> {
         }
     }
 
+    pub fn drop_cfs(&mut self, names: &[&str]) -> Result<(), Error> {
+        let cfs = names
+            .iter()
+            .map(|name| {
+                self.cfs
+                    .cfs
+                    .remove(*name)
+                    .ok_or_else(|| Error::new(format!("Invalid column family: {}", *name)))
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
+        let mut cf_inners: Vec<_> = cfs.iter().map(|cf| cf.inner).collect();
+        self.drop_column_families(&mut cf_inners[..], cfs)
+    }
+
     /// Returns the underlying column family handle
     pub fn cf_handle(&self, name: &str) -> Option<&ColumnFamily> {
         self.cfs.cfs.get(name)
@@ -2725,6 +2760,22 @@ impl<I: DBInner> DBCommon<MultiThreaded, I> {
         } else {
             Err(Error::new(format!("Invalid column family: {name}")))
         }
+    }
+
+    pub fn drop_cfs(&self, names: &[&str]) -> Result<(), Error> {
+        let cfs = names
+            .iter()
+            .map(|name| {
+                self.cfs
+                    .cfs
+                    .write()
+                    .unwrap()
+                    .remove(*name)
+                    .ok_or_else(|| Error::new(format!("Invalid column family: {}", *name)))
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
+        let mut cf_inners: Vec<_> = cfs.iter().map(|cf| cf.inner).collect();
+        self.drop_column_families(&mut cf_inners[..], cfs)
     }
 
     /// Returns the underlying column family handle
