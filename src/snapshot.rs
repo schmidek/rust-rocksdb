@@ -37,7 +37,7 @@ pub type Snapshot<'a> = SnapshotWithThreadMode<'a, DB>;
 /// ```
 ///
 pub struct SnapshotWithThreadMode<'a, D: DBAccess> {
-    db: &'a D,
+    pub db: &'a D,
     pub(crate) inner: *const ffi::rocksdb_snapshot_t,
 }
 
