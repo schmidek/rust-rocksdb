@@ -254,6 +254,7 @@ fn build_rocksdb() {
 
     config.cpp(true);
     config.flag_if_supported("-std=c++17");
+    config.flag("-include").flag("cstdint");
     config.compile("librocksdb.a");
 }
 
