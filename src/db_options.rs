@@ -4364,6 +4364,14 @@ impl IngestExternalFileOptions {
         }
     }
 
+    /// Same as move_files except that input files will NOT be unlinked.
+    /// Only one of `move_files` and `link_files` can be set at the same time.
+    pub fn set_link_files(&mut self, v: bool) {
+        unsafe {
+            ffi::rocksdb_ingestexternalfileoptions_set_link_files(self.inner, c_uchar::from(v));
+        }
+    }
+
     /// If set to false, an ingested file keys could appear in existing snapshots
     /// that where created before the file was ingested.
     pub fn set_snapshot_consistency(&mut self, v: bool) {
