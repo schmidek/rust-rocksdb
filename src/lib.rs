@@ -124,7 +124,7 @@ pub use crate::{
         BlockBasedIndexType, BlockBasedOptions, BlockBasedTablePinningTier,
         BottommostLevelCompaction, Cache, ChecksumType, CompactOptions, CompactionPri,
         CuckooTableOptions, DBCompactionStyle, DBCompressionType, DBPath, DBRecoveryMode,
-        DataBlockIndexType, FifoCompactOptions, FlushOptions, InfoLogger,
+        DataBlockIndexType, FifoCompactOptions, FlushOptions, GetMergeOperandsOptions, InfoLogger,
         IngestExternalFileOptions, KeyEncodingType, LogLevel, LruCacheOptions, MemtableFactory,
         Options, PlainTableFactoryOptions, ReadOptions, ReadTier, UniversalCompactOptions,
         UniversalCompactionStopStyle, WaitForCompactOptions, WriteBufferManager, WriteOptions,

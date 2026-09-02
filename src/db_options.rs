@@ -429,6 +429,20 @@ pub struct ReadOptions {
     iterate_lower_bound: Option<Vec<u8>>,
 }
 
+/// For configuring [`DB::get_merge_operands`](crate::DB::get_merge_operands) and its variants.
+///
+/// Note that the default `expected_max_number_of_operands` is 0, which makes
+/// every lookup on a key with merge operands fail. Set it to the number of
+/// operands you are prepared to receive:
+///
+/// ```
+/// let mut opts = rocksdb::GetMergeOperandsOptions::default();
+/// opts.set_expected_max_number_of_operands(8);
+/// ```
+pub struct GetMergeOperandsOptions {
+    pub(crate) inner: *mut ffi::rocksdb_getmergeoperandsoptions_t,
+}
+
 /// Configuration of cuckoo-based storage.
 pub struct CuckooTableOptions {
     pub(crate) inner: *mut ffi::rocksdb_cuckoo_table_options_t,
@@ -480,6 +494,7 @@ unsafe impl Send for FlushOptions {}
 unsafe impl Send for BlockBasedOptions {}
 unsafe impl Send for CuckooTableOptions {}
 unsafe impl Send for ReadOptions {}
+unsafe impl Send for GetMergeOperandsOptions {}
 unsafe impl Send for IngestExternalFileOptions {}
 unsafe impl Send for CacheWrapper {}
 unsafe impl Send for CompactOptions {}
@@ -496,6 +511,8 @@ unsafe impl Sync for FlushOptions {}
 unsafe impl Sync for BlockBasedOptions {}
 unsafe impl Sync for CuckooTableOptions {}
 unsafe impl Sync for ReadOptions {}
+// Sound because the continue callback is required to be `Send + Sync`.
+unsafe impl Sync for GetMergeOperandsOptions {}
 unsafe impl Sync for IngestExternalFileOptions {}
 unsafe impl Sync for CacheWrapper {}
 unsafe impl Sync for CompactOptions {}
@@ -567,6 +584,14 @@ impl Drop for ReadOptions {
     fn drop(&mut self) {
         unsafe {
             ffi::rocksdb_readoptions_destroy(self.inner);
+        }
+    }
+}
+
+impl Drop for GetMergeOperandsOptions {
+    fn drop(&mut self) {
+        unsafe {
+            ffi::rocksdb_getmergeoperandsoptions_destroy(self.inner);
         }
     }
 }
@@ -4446,6 +4471,93 @@ impl Default for ReadOptions {
             }
         }
     }
+}
+
+impl GetMergeOperandsOptions {
+    /// A hard limit on the number of merge operands returned by
+    /// [`DB::get_merge_operands`](crate::DB::get_merge_operands) and its
+    /// variants. If a key has more merge operands than this, the lookup fails
+    /// and no operand is returned.
+    ///
+    /// Default: 0
+    pub fn set_expected_max_number_of_operands(&mut self, num: c_int) {
+        unsafe {
+            ffi::rocksdb_getmergeoperandsoptions_set_expected_max_number_of_operands(
+                self.inner, num,
+            );
+        }
+    }
+
+    /// Returns the current hard limit on the number of merge operands returned
+    /// by a lookup.
+    pub fn expected_max_number_of_operands(&self) -> c_int {
+        unsafe {
+            ffi::rocksdb_getmergeoperandsoptions_get_expected_max_number_of_operands(self.inner)
+        }
+    }
+
+    /// Sets a callback invoked with each merge operand as it is read, excluding
+    /// any base value. Operands are read from newest to oldest. Returning
+    /// `false` ends the lookup at the operand the callback was just invoked on;
+    /// returning `true` lets the lookup continue.
+    ///
+    /// Setting a callback replaces any previously set one. The lookup always
+    /// continues until there are no more merge operands when no callback is
+    /// set.
+    pub fn set_continue_cb<F>(&mut self, continue_cb: F)
+    where
+        F: Fn(&[u8]) -> bool + Send + Sync + 'static,
+    {
+        let state = Box::into_raw(Box::new(continue_cb));
+        unsafe {
+            ffi::rocksdb_getmergeoperandsoptions_set_continue_cb(
+                self.inner,
+                state.cast::<c_void>(),
+                Some(continue_cb_destructor::<F>),
+                Some(continue_cb_callback::<F>),
+            );
+        }
+    }
+
+    /// Clears any callback previously set with
+    /// [`set_continue_cb`](#method.set_continue_cb), restoring the default
+    /// behaviour of reading every merge operand.
+    pub fn clear_continue_cb(&mut self) {
+        unsafe {
+            ffi::rocksdb_getmergeoperandsoptions_set_continue_cb(
+                self.inner,
+                null_mut(),
+                None,
+                None,
+            );
+        }
+    }
+}
+
+impl Default for GetMergeOperandsOptions {
+    fn default() -> Self {
+        let opts = unsafe { ffi::rocksdb_getmergeoperandsoptions_create() };
+        assert!(
+            !opts.is_null(),
+            "Could not create RocksDB get merge operands options"
+        );
+
+        Self { inner: opts }
+    }
+}
+
+unsafe extern "C" fn continue_cb_destructor<F>(state: *mut c_void) {
+    drop(unsafe { Box::from_raw(state.cast::<F>()) });
+}
+
+unsafe extern "C" fn continue_cb_callback<F: Fn(&[u8]) -> bool>(
+    state: *mut c_void,
+    operand: *const c_char,
+    operand_len: size_t,
+) -> c_uchar {
+    let continue_cb = unsafe { &*(state.cast::<F>()) };
+    let operand = unsafe { slice::from_raw_parts(operand.cast::<u8>(), operand_len) };
+    c_uchar::from(continue_cb(operand))
 }
 
 impl IngestExternalFileOptions {

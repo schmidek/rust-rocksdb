@@ -13,8 +13,10 @@
 // limitations under the License.
 
 use crate::{
-    db::DBAccess, ffi, AsColumnFamilyRef, DBIteratorWithThreadMode, DBPinnableSlice,
-    DBRawIteratorWithThreadMode, Error, IteratorMode, ReadOptions, DB,
+    db::{DBAccess, DBInner},
+    ffi, AsColumnFamilyRef, DBCommon, DBIteratorWithThreadMode, DBPinnableSlice,
+    DBRawIteratorWithThreadMode, Error, GetMergeOperandsOptions, IteratorMode, ReadOptions,
+    ThreadMode, DB,
 };
 
 /// A type alias to keep compatibility. See [`SnapshotWithThreadMode`] for details
@@ -261,6 +263,67 @@ impl<'a, D: DBAccess> SnapshotWithThreadMode<'a, D> {
     {
         readopts.set_snapshot(self);
         self.db.multi_get_cf_opt(keys_cf, &readopts)
+    }
+}
+
+/// Merge operand lookups, which RocksDB's C API only exposes for a plain
+/// database, and hence not for snapshots of a transaction or of a
+/// `TransactionDB`.
+impl<T: ThreadMode, D: DBInner> SnapshotWithThreadMode<'_, DBCommon<T, D>> {
+    /// Return the merge operands stored for a key as of this snapshot, in the
+    /// order they were inserted (older insertions first), using the default
+    /// read options.
+    ///
+    /// See [`DBCommon::get_merge_operands`] for the operand count constraints.
+    pub fn get_merge_operands<K: AsRef<[u8]>>(
+        &self,
+        key: K,
+        merge_operands_opts: &GetMergeOperandsOptions,
+    ) -> Result<Vec<DBPinnableSlice>, Error> {
+        let readopts = ReadOptions::default();
+        self.get_merge_operands_opt(key, readopts, merge_operands_opts)
+    }
+
+    /// Return the merge operands stored for a key in the given column family as
+    /// of this snapshot, in the order they were inserted (older insertions
+    /// first), using the default read options.
+    pub fn get_merge_operands_cf<K: AsRef<[u8]>>(
+        &self,
+        cf: &impl AsColumnFamilyRef,
+        key: K,
+        merge_operands_opts: &GetMergeOperandsOptions,
+    ) -> Result<Vec<DBPinnableSlice>, Error> {
+        let readopts = ReadOptions::default();
+        self.get_merge_operands_cf_opt(cf, key, readopts, merge_operands_opts)
+    }
+
+    /// Return the merge operands stored for a key as of this snapshot, in the
+    /// order they were inserted (older insertions first), using the given read
+    /// options.
+    pub fn get_merge_operands_opt<K: AsRef<[u8]>>(
+        &self,
+        key: K,
+        mut readopts: ReadOptions,
+        merge_operands_opts: &GetMergeOperandsOptions,
+    ) -> Result<Vec<DBPinnableSlice>, Error> {
+        readopts.set_snapshot(self);
+        self.db
+            .get_merge_operands_opt(key.as_ref(), &readopts, merge_operands_opts)
+    }
+
+    /// Return the merge operands stored for a key in the given column family as
+    /// of this snapshot, in the order they were inserted (older insertions
+    /// first), using the given read options.
+    pub fn get_merge_operands_cf_opt<K: AsRef<[u8]>>(
+        &self,
+        cf: &impl AsColumnFamilyRef,
+        key: K,
+        mut readopts: ReadOptions,
+        merge_operands_opts: &GetMergeOperandsOptions,
+    ) -> Result<Vec<DBPinnableSlice>, Error> {
+        readopts.set_snapshot(self);
+        self.db
+            .get_merge_operands_cf_opt(cf, key.as_ref(), &readopts, merge_operands_opts)
     }
 }
 

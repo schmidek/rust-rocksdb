@@ -23,8 +23,9 @@ use crate::{
     },
     ColumnFamily, ColumnFamilyDescriptor, CompactOptions, DBIteratorWithThreadMode,
     DBPinnableSlice, DBRawIteratorWithThreadMode, DBWALIterator, Direction, Error, FlushOptions,
-    IngestExternalFileOptions, IteratorMode, Options, ReadOptions, SnapshotWithThreadMode,
-    WaitForCompactOptions, WriteBatch, WriteOptions, DEFAULT_COLUMN_FAMILY_NAME,
+    GetMergeOperandsOptions, IngestExternalFileOptions, IteratorMode, Options, ReadOptions,
+    SnapshotWithThreadMode, WaitForCompactOptions, WriteBatch, WriteOptions,
+    DEFAULT_COLUMN_FAMILY_NAME,
 };
 
 use crate::column_family::ColumnFamilyTtl;
@@ -1147,6 +1148,104 @@ impl<T: ThreadMode, D: DBInner> DBCommon<T, D> {
         key: K,
     ) -> Result<Option<DBPinnableSlice>, Error> {
         self.get_pinned_cf_opt(cf, key, &ReadOptions::default())
+    }
+
+    /// Return the merge operands stored for a key, in the order they were
+    /// inserted (older insertions first), using RocksDB's PinnableSlice so as
+    /// to avoid unnecessary memory copy.
+    ///
+    /// A key without merge operands yields an empty vector. If the key has more
+    /// merge operands than
+    /// [`GetMergeOperandsOptions::expected_max_number_of_operands`], an error is
+    /// returned and no operand is read.
+    pub fn get_merge_operands_opt<K: AsRef<[u8]>>(
+        &self,
+        key: K,
+        readopts: &ReadOptions,
+        merge_operands_opts: &GetMergeOperandsOptions,
+    ) -> Result<Vec<DBPinnableSlice>, Error> {
+        if readopts.inner.is_null() {
+            return Err(Error::new(
+                "Unable to create RocksDB read options. This is a fairly trivial call, and its \
+                 failure may be indicative of a mis-compiled or mis-loaded RocksDB library."
+                    .to_owned(),
+            ));
+        }
+
+        let key = key.as_ref();
+        let mut operands = merge_operands_buffer(merge_operands_opts);
+        let mut num_operands: c_int = 0;
+        unsafe {
+            ffi_try!(ffi::rocksdb_get_merge_operands(
+                self.inner.inner(),
+                readopts.inner,
+                key.as_ptr() as *const c_char,
+                key.len() as size_t,
+                merge_operands_opts.inner,
+                operands.as_mut_ptr(),
+                &raw mut num_operands,
+            ));
+            Ok(collect_merge_operands(operands, num_operands))
+        }
+    }
+
+    /// Return the merge operands stored for a key, in the order they were
+    /// inserted (older insertions first). Similar to `get_merge_operands_opt`
+    /// but leverages default read options.
+    pub fn get_merge_operands<K: AsRef<[u8]>>(
+        &self,
+        key: K,
+        merge_operands_opts: &GetMergeOperandsOptions,
+    ) -> Result<Vec<DBPinnableSlice>, Error> {
+        self.get_merge_operands_opt(key, &ReadOptions::default(), merge_operands_opts)
+    }
+
+    /// Return the merge operands stored for a key in the given column family,
+    /// in the order they were inserted (older insertions first). Similar to
+    /// `get_merge_operands_opt` but allows specifying ColumnFamily.
+    pub fn get_merge_operands_cf_opt<K: AsRef<[u8]>>(
+        &self,
+        cf: &impl AsColumnFamilyRef,
+        key: K,
+        readopts: &ReadOptions,
+        merge_operands_opts: &GetMergeOperandsOptions,
+    ) -> Result<Vec<DBPinnableSlice>, Error> {
+        if readopts.inner.is_null() {
+            return Err(Error::new(
+                "Unable to create RocksDB read options. This is a fairly trivial call, and its \
+                 failure may be indicative of a mis-compiled or mis-loaded RocksDB library."
+                    .to_owned(),
+            ));
+        }
+
+        let key = key.as_ref();
+        let mut operands = merge_operands_buffer(merge_operands_opts);
+        let mut num_operands: c_int = 0;
+        unsafe {
+            ffi_try!(ffi::rocksdb_get_merge_operands_cf(
+                self.inner.inner(),
+                readopts.inner,
+                cf.inner(),
+                key.as_ptr() as *const c_char,
+                key.len() as size_t,
+                merge_operands_opts.inner,
+                operands.as_mut_ptr(),
+                &raw mut num_operands,
+            ));
+            Ok(collect_merge_operands(operands, num_operands))
+        }
+    }
+
+    /// Return the merge operands stored for a key in the given column family,
+    /// in the order they were inserted (older insertions first). Similar to
+    /// `get_merge_operands_cf_opt` but leverages default read options.
+    pub fn get_merge_operands_cf<K: AsRef<[u8]>>(
+        &self,
+        cf: &impl AsColumnFamilyRef,
+        key: K,
+        merge_operands_opts: &GetMergeOperandsOptions,
+    ) -> Result<Vec<DBPinnableSlice>, Error> {
+        self.get_merge_operands_cf_opt(cf, key, &ReadOptions::default(), merge_operands_opts)
     }
 
     /// Return the values associated with the given keys.
@@ -2835,6 +2934,32 @@ pub struct LiveFile {
     pub num_entries: u64,
     /// Number of deletions/tomb key(s) in the file
     pub num_deletions: u64,
+}
+
+/// Allocates the array `rocksdb_get_merge_operands` populates, whose length
+/// must be the configured maximum number of operands.
+fn merge_operands_buffer(
+    merge_operands_opts: &GetMergeOperandsOptions,
+) -> Vec<*mut ffi::rocksdb_pinnableslice_t> {
+    let capacity = merge_operands_opts.expected_max_number_of_operands().max(0) as usize;
+    vec![ptr::null_mut(); capacity]
+}
+
+/// Takes ownership of the operands `rocksdb_get_merge_operands` populated.
+///
+/// # Safety
+///
+/// The first `num_operands` entries of `operands` must have been populated by a
+/// successful `rocksdb_get_merge_operands` call and not yet been freed.
+unsafe fn collect_merge_operands<'a>(
+    operands: Vec<*mut ffi::rocksdb_pinnableslice_t>,
+    num_operands: c_int,
+) -> Vec<DBPinnableSlice<'a>> {
+    operands
+        .into_iter()
+        .take(num_operands.max(0) as usize)
+        .map(|operand| unsafe { DBPinnableSlice::from_c(operand) })
+        .collect()
 }
 
 fn convert_options(opts: &[(&str, &str)]) -> Result<Vec<(CString, CString)>, Error> {
