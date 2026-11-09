@@ -2671,6 +2671,28 @@ impl<T: ThreadMode, D: DBInner> DBCommon<T, D> {
         }
     }
 
+    /// Verifies the block checksums of every live SST file in the database.
+    ///
+    /// Stops at the first corruption found; the returned error names the corrupt file.
+    pub fn verify_checksum(&self) -> Result<(), Error> {
+        unsafe {
+            ffi_try!(ffi::rocksdb_verify_checksum(self.inner.inner()));
+        }
+        Ok(())
+    }
+
+    /// Like [`verify_checksum`](Self::verify_checksum), using the given read options
+    /// (e.g. to set `fill_cache` or `readahead_size`).
+    pub fn verify_checksum_opt(&self, readopts: &ReadOptions) -> Result<(), Error> {
+        unsafe {
+            ffi_try!(ffi::rocksdb_verify_checksum_with_options(
+                self.inner.inner(),
+                readopts.inner
+            ));
+        }
+        Ok(())
+    }
+
     /// Request stopping background work, if wait is true wait until it's done.
     pub fn cancel_all_background_work(&self, wait: bool) {
         unsafe {
